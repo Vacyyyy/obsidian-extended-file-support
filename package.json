@@ -12,6 +12,7 @@
 	"author": "",
 	"license": "MIT",
 	"devDependencies": {
+		"@fontsource-variable/open-sans": "5.3.0",
 		"@types/node": "^16.11.6",
 		"@types/pdfjs-dist": "^2.10.378",
 		"@types/sql.js": "^1.4.9",
