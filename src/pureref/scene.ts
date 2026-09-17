@@ -181,7 +181,6 @@ export function renderScene(board: PurFile, doc: Document): RenderedScene {
 		width: '100%',
 		height: '100%',
 		role: 'img',
-		'aria-label': 'PureRef board',
 		preserveAspectRatio: 'xMidYMid meet',
 	});
 	const defs = svgElement(doc, 'defs');
@@ -286,9 +285,9 @@ export function renderScene(board: PurFile, doc: Document): RenderedScene {
 			try {
 				group.setAttribute('transform', affine(item.transform));
 				group.setAttribute('opacity', String(Math.max(0, Math.min(1, item.opacity ?? 1))));
-				const title = svgElement(doc, 'title');
-				title.textContent = item.name ?? `Item ${item.id}`;
-				group.append(title);
+				const description = svgElement(doc, 'desc');
+				description.textContent = item.name ?? `Item ${item.id}`;
+				group.append(description);
 				parent.append(group);
 				const instance = images.get(item.id),
 					note = notes.get(item.id),

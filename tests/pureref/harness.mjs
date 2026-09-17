@@ -2,6 +2,7 @@ import { PurFile } from 'pur-2-file-format';
 import { PureRefViewer } from '../../src/pureref/viewer.ts';
 import { getSQLite } from '../../src/pureref/sqlite.ts';
 import { PURComponent, PURView } from '../../src/extensions/pur.ts';
+import { DEFAULT_SETTINGS } from '../../src/settings.ts';
 
 const host = document.querySelector('#board');
 const status = document.querySelector('#status');
@@ -77,6 +78,7 @@ window.pureref = {
 	fixture,
 	loadBytes,
 	state: () => viewer?.getState(),
+	action: (name, ...args) => viewer?.[name](...args),
 	destroy: () => {
 		viewer?.destroy();
 		viewer = undefined;
@@ -84,15 +86,15 @@ window.pureref = {
 		component = undefined;
 	},
 	urls: () => urls.size,
-	async mountComponent() {
+	async mountComponent(name = 'demo.pur', settings) {
 		viewer?.destroy();
 		viewer = undefined;
 		component?.onunload();
 		host.replaceChildren();
-		const bytes = await fixture('demo.pur');
+		const bytes = await fixture(name);
 		let pending = [],
 			listener;
-		const file = { name: 'demo.pur', path: 'demo.pur', stat: { size: bytes.byteLength } };
+		const file = { name, path: name, stat: { size: bytes.byteLength } };
 		const vault = {
 			on: (_event, callback) => {
 				listener = callback;
@@ -103,14 +105,21 @@ window.pureref = {
 			},
 			readBinary: () => new Promise((resolve) => pending.push(resolve)),
 		};
-		component = new PURComponent(host, { app: { vault } }, file, '600x400');
+		component = new PURComponent(host, {
+			app: { vault },
+			settings: settings ? { ...DEFAULT_SETTINGS, ...settings } : undefined,
+			getPurViewportState: () => undefined,
+			setPurViewportState: () => {},
+		}, file, '600x400');
 		window.componentTest = {
+			waitingForAttachment: () => Boolean(component.cancelAttachmentWait),
 			start: () => {
 				void component.loadFile();
 			},
 			modify: () => listener?.(file),
 			resolve: (index, data = bytes) => pending[index](data),
 			state: () => component.viewer?.getState(),
+			zoomIn: () => component.viewer?.zoomIn(),
 			activeListeners: () => Number(Boolean(listener)),
 			pending: () => pending.length,
 			close: () => component.onunload(),

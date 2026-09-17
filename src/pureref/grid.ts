@@ -1,10 +1,13 @@
+import { Menu, MenuItem } from 'obsidian';
+
 export type GridMode = 'none' | 'lines' | 'dots';
 
 /** Viewport-sized background, positioned from the scene matrix so it never affects fitting. */
 export class BoardGrid {
 	mode: GridMode;
+	private previousMode: Exclude<GridMode, 'none'> = 'lines';
 	private layer: HTMLDivElement;
-	private menu?: HTMLDivElement;
+	private menu?: Menu;
 	private frame = 0;
 	private observer: ResizeObserver;
 	private win: Window;
@@ -15,8 +18,12 @@ export class BoardGrid {
 		private svg: SVGSVGElement,
 		mode: GridMode = 'none',
 		private onChange?: () => void,
+		private onOpenSettings?: () => void,
+		private onToggleComments?: () => void,
+		private commentsVisible?: () => boolean,
 	) {
 		this.mode = mode;
+		if (mode !== 'none') this.previousMode = mode;
 		this.doc = viewport.ownerDocument;
 		this.win = this.doc.defaultView!;
 		this.layer = this.doc.createElement('div');
@@ -26,13 +33,28 @@ export class BoardGrid {
 		viewport.addEventListener('contextmenu', this.open);
 		viewport.addEventListener('keydown', this.keyboardOpen);
 		svg.addEventListener('panzoomchange', this.refresh);
-		this.doc.addEventListener('pointerdown', this.outside, true);
 		this.doc.addEventListener('scroll', this.dismiss, true);
 		this.win.addEventListener('blur', this.dismiss);
 		this.win.addEventListener('resize', this.dismiss);
 		this.observer = new ResizeObserver(this.refresh);
 		this.observer.observe(viewport);
 		this.refresh();
+	}
+
+	setMode(mode: GridMode): void {
+		this.mode = mode;
+		if (mode !== 'none') this.previousMode = mode;
+		this.onChange?.();
+		this.refresh();
+	}
+
+	toggle(): void {
+		this.setMode(this.mode === 'none' ? this.previousMode : 'none');
+	}
+
+	cycle(): void {
+		const modes: GridMode[] = ['none', 'lines', 'dots'];
+		this.setMode(modes[(modes.indexOf(this.mode) + 1) % modes.length]);
 	}
 
 	refresh = (): void => {
@@ -58,11 +80,8 @@ export class BoardGrid {
 	};
 
 	private dismiss = (): void => {
-		this.menu?.remove();
+		this.menu?.hide();
 		this.menu = undefined;
-	};
-	private outside = (event: Event): void => {
-		if (this.menu && !this.menu.contains(event.target as Node)) this.dismiss();
 	};
 	private keyboardOpen = (event: KeyboardEvent): void => {
 		if (event.key !== 'ContextMenu' && !(event.shiftKey && event.key === 'F10')) return;
@@ -79,57 +98,38 @@ export class BoardGrid {
 
 	private show(x: number, y: number): void {
 		this.dismiss();
-		const menu = this.doc.createElement('div');
+		const menu = new Menu();
 		this.menu = menu;
-		menu.className = 'pureref-grid-menu';
-		menu.setAttribute('role', 'menu');
-		menu.setAttribute('aria-label', 'Board grid');
-		const label = this.doc.createElement('div');
-		label.className = 'pureref-menu-label';
-		label.textContent = 'Grid';
-		menu.append(label);
-		const buttons: HTMLButtonElement[] = [];
-		for (const [value, title] of [
-			['none', 'None'],
-			['lines', 'Lines'],
-			['dots', 'Dots'],
-		] as const) {
-			const button = this.doc.createElement('button');
-			button.type = 'button';
-			button.setAttribute('role', 'menuitemradio');
-			button.setAttribute('aria-label', title);
-			button.setAttribute('aria-checked', String(value === this.mode));
-			button.textContent = title;
-			button.addEventListener('click', () => {
-				this.mode = value;
-				this.onChange?.();
-				this.refresh();
-				this.dismiss();
-				this.viewport.focus({ preventScroll: true });
-			});
-			buttons.push(button);
-			menu.append(button);
-		}
-		menu.addEventListener('keydown', (event) => {
-			const current = buttons.indexOf(this.doc.activeElement as HTMLButtonElement);
-			if (event.key === 'Escape' || event.key === 'Tab') {
-				this.dismiss();
-				this.viewport.focus({ preventScroll: true });
-			} else if (event.key === 'ArrowDown') buttons[(current + 1) % buttons.length].focus();
-			else if (event.key === 'ArrowUp')
-				buttons[(current + buttons.length - 1) % buttons.length].focus();
-			else if (event.key === 'Home') buttons[0].focus();
-			else if (event.key === 'End') buttons[buttons.length - 1].focus();
-			else return;
-			event.preventDefault();
-			event.stopPropagation();
+		menu.setUseNativeMenu(false);
+		menu.addItem(item => {
+			item.setTitle('Grid').setIcon('grid');
+			// Obsidian's submenu API is available at runtime but absent from public typings.
+			const submenu = (item as MenuItem & { setSubmenu(): Menu }).setSubmenu();
+			for (const [value, title] of [['none', 'None'], ['lines', 'Lines'], ['dots', 'Dots']] as const) {
+				submenu.addItem(option => option.setTitle(title).setChecked(value === this.mode).onClick(() => {
+					this.setMode(value);
+					this.viewport.focus({ preventScroll: true });
+				}));
+			}
 		});
-		menu.addEventListener('contextmenu', (event) => event.preventDefault());
-		this.doc.body.append(menu);
-		const bounds = menu.getBoundingClientRect();
-		menu.style.left = `${Math.max(4, Math.min(x, this.win.innerWidth - bounds.width - 4))}px`;
-		menu.style.top = `${Math.max(4, Math.min(y, this.win.innerHeight - bounds.height - 4))}px`;
-		buttons[['none', 'lines', 'dots'].indexOf(this.mode)].focus({ preventScroll: true });
+		if (this.onToggleComments) menu.addItem(item => item
+			.setTitle(this.commentsVisible?.() ? 'Hide comments' : 'Show comments')
+			.setIcon('message-square')
+			.onClick(() => {
+				this.onToggleComments!();
+				this.viewport.focus({ preventScroll: true });
+			}));
+		if (this.onOpenSettings) {
+			menu.addSeparator();
+			menu.addItem(item => item
+				.setTitle('Settings')
+				.setIcon('settings')
+				.onClick(this.onOpenSettings!));
+		}
+		menu.onHide(() => {
+			if (this.menu === menu) this.menu = undefined;
+		});
+		menu.showAtPosition({ x, y }, this.doc);
 	}
 
 	dispose(): void {
@@ -139,7 +139,6 @@ export class BoardGrid {
 		this.viewport.removeEventListener('contextmenu', this.open);
 		this.viewport.removeEventListener('keydown', this.keyboardOpen);
 		this.svg.removeEventListener('panzoomchange', this.refresh);
-		this.doc.removeEventListener('pointerdown', this.outside, true);
 		this.doc.removeEventListener('scroll', this.dismiss, true);
 		this.win.removeEventListener('blur', this.dismiss);
 		this.win.removeEventListener('resize', this.dismiss);

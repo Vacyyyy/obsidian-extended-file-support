@@ -2,14 +2,33 @@ import { App, Events, Platform, Plugin, PluginSettingTab, Setting } from 'obsidi
 import { EXTENSION_REGISTRY } from 'src/extensionsRegistry';
 import { DEFAULT_SETTINGS, ExtendedFileSupportSettings } from 'src/settings';
 import { EmbedRegistry } from 'obsidian-typings';
+import { PureRefViewer } from 'src/pureref/viewer';
+import { StoredViewportState, validViewportState } from 'src/pureref/viewport-state';
+import type { ViewportState } from 'src/pureref/viewer';
+
+interface PluginData extends Partial<ExtendedFileSupportSettings> {
+	pur_viewport_states?: { version: 1; entries: Record<string, StoredViewportState> };
+}
 
 export default class ExtendedFileSupport extends Plugin {
 	settings: ExtendedFileSupportSettings;
 	readonly purerefSettingsEvents = new Events();
+	private purViewportStates: Record<string, StoredViewportState> = {};
+	private viewportSaveTimer?: number;
+	private saveChain = Promise.resolve();
+
+	openSettings(): void {
+		const setting = (this.app as App & {
+			setting: { open(): void; openTabById(id: string): void };
+		}).setting;
+		setting.open();
+		setting.openTabById(this.manifest.id);
+	}
 
 	async onload() {
 		await this.loadSettings();
 		this.addSettingTab(new ExtendedFileSupportSettingTab(this.app, this));
+		this.registerPureRefCommands();
 
 		const embedRegistry = this.app.embedRegistry as EmbedRegistry; 
 
@@ -29,7 +48,57 @@ export default class ExtendedFileSupport extends Plugin {
 		}
 	}
 
+	private registerPureRefCommands(): void {
+		const command = (
+			id: string,
+			name: string,
+			action: (viewer: PureRefViewer) => boolean,
+			hotkeys?: { modifiers: ('Mod' | 'Ctrl' | 'Meta' | 'Shift' | 'Alt')[]; key: string }[],
+		) => this.addCommand({
+			id: `pureref-${id}`,
+			name: `PureRef: ${name}`,
+			hotkeys,
+			checkCallback: checking => {
+				const viewer = PureRefViewer.active(document);
+				if (!viewer?.hasKeyboardFocus()) return false;
+				if (!checking) action(viewer);
+				return true;
+			},
+		});
+
+		command('toggle-movement-lock', 'Toggle canvas movement lock', viewer => viewer.toggleLock(),
+			[{ modifiers: ['Mod'], key: 'r' }]);
+		command('toggle-image-grayscale', 'Toggle grayscale for selected image', viewer => viewer.toggleImageGrayscale(),
+			[{ modifiers: ['Alt'], key: 'g' }]);
+		command('toggle-canvas-grayscale', 'Toggle grayscale for canvas', viewer => viewer.toggleCanvasGrayscale(),
+			[{ modifiers: ['Mod', 'Alt'], key: 'g' }]);
+		command('toggle-comments', 'Toggle comment viewer', viewer => viewer.toggleComments(),
+			[{ modifiers: ['Alt'], key: 'c' }]);
+		command('toggle-grid', 'Toggle grid', viewer => viewer.toggleGrid(),
+			[{ modifiers: [], key: 'g' }]);
+		command('cycle-grid', 'Cycle grid', viewer => viewer.cycleGrid(),
+			[{ modifiers: ['Mod'], key: 'g' }]);
+		command('zoom-in', 'Zoom in', viewer => viewer.zoomIn(),
+			[{ modifiers: ['Mod'], key: '+' }]);
+		command('zoom-out', 'Zoom out', viewer => viewer.zoomOut(),
+			[{ modifiers: ['Mod'], key: '-' }]);
+		command('fit-board', 'Fit board', viewer => viewer.fit(),
+			[{ modifiers: [], key: 'f' }]);
+		command('previous-image', 'Previous image', viewer => viewer.cycleImage(-1),
+			[{ modifiers: [], key: 'ArrowLeft' }]);
+		command('next-image', 'Next image', viewer => viewer.cycleImage(1),
+			[{ modifiers: [], key: 'ArrowRight' }]);
+		command('undo', 'Undo viewer change', viewer => viewer.undo(),
+			[{ modifiers: ['Mod'], key: 'z' }]);
+		command('redo', 'Redo viewer change', viewer => viewer.redo(), [
+			{ modifiers: ['Mod', 'Shift'], key: 'z' },
+			{ modifiers: ['Ctrl'], key: 'y' },
+		]);
+	}
+
 	onunload() {
+		if (this.viewportSaveTimer !== undefined) window.clearTimeout(this.viewportSaveTimer);
+		if (this.settings.pur_persist_viewport) void this.enqueueDataSave();
 		const embedRegistry = this.app.embedRegistry as EmbedRegistry; 
 
 		for (const extension of EXTENSION_REGISTRY) {
@@ -44,12 +113,55 @@ export default class ExtendedFileSupport extends Plugin {
 	}
 
 	async loadSettings() {
-		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+		const data = (await this.loadData() ?? {}) as PluginData;
+		const { pur_viewport_states, ...storedSettings } = data;
+		this.settings = Object.assign({}, DEFAULT_SETTINGS, storedSettings);
+		const storedViewports = pur_viewport_states?.version === 1 ? pur_viewport_states.entries : {};
+		for (const [path, entry] of Object.entries(storedViewports)) {
+			const state = validViewportState(entry?.state);
+			if (state && Number.isFinite(entry.updatedAt))
+				this.purViewportStates[path] = { state, updatedAt: entry.updatedAt };
+		}
 	}
 
 	async saveSettings() {
-		await this.saveData(this.settings);
+		await this.enqueueDataSave();
 		this.purerefSettingsEvents.trigger('change');
+	}
+
+	private enqueueDataSave(): Promise<void> {
+		this.saveChain = this.saveChain.catch(() => undefined).then(() => this.saveData({
+			...this.settings,
+			...(this.settings.pur_persist_viewport ? {
+				pur_viewport_states: { version: 1 as const, entries: this.purViewportStates },
+			} : {}),
+		}));
+		return this.saveChain;
+	}
+
+	getPurViewportState(path: string): ViewportState | undefined {
+		return this.settings.pur_persist_viewport ? this.purViewportStates[path]?.state : undefined;
+	}
+
+	setPurViewportState(path: string, state: ViewportState): void {
+		if (!this.settings.pur_persist_viewport) return;
+		this.purViewportStates[path] = { state, updatedAt: Date.now() };
+		const entries = Object.entries(this.purViewportStates);
+		if (entries.length > 250) {
+			entries.sort((a, b) => b[1].updatedAt - a[1].updatedAt);
+			this.purViewportStates = Object.fromEntries(entries.slice(0, 250));
+		}
+		if (this.viewportSaveTimer !== undefined) window.clearTimeout(this.viewportSaveTimer);
+		this.viewportSaveTimer = window.setTimeout(() => {
+			this.viewportSaveTimer = undefined;
+			void this.enqueueDataSave();
+		}, 750);
+	}
+
+	clearPurViewportStates(): void {
+		this.purViewportStates = {};
+		if (this.viewportSaveTimer !== undefined) window.clearTimeout(this.viewportSaveTimer);
+		this.viewportSaveTimer = undefined;
 	}
 
 	public toggleExtension(extension: string, enable: boolean): void {
@@ -155,33 +267,44 @@ class ExtendedFileSupportSettingTab extends PluginSettingTab {
 				}));
 
 		const settings = this.plugin.settings;
-		const controls = settings.pur_show_zoom
-			? (settings.pur_show_fit ? "both" : "zoom")
-			: (settings.pur_show_fit ? "fit" : "none");
 		new Setting(containerEl)
-			.setName(".pur controls")
-			.setDesc("Buttons shown over the board. Mouse and keyboard controls always work.")
-			.addDropdown(dropdown => dropdown
-				.addOptions({ both: "Zoom and Fit", zoom: "Zoom only", fit: "Fit only", none: "None" })
-				.setValue(controls)
-				.onChange(async (value) => {
-					settings.pur_show_zoom = value === "both" || value === "zoom";
-					settings.pur_show_fit = value === "both" || value === "fit";
+			.setName(".pur remember view state")
+			.setDesc("Reloads always preserve zoom and view state. Enable this to also preserve zoom, position, grid, lock, grayscale, and comment visibility across full Obsidian restarts. Turning it off deletes the states saved for restarts.")
+			.addToggle(toggle => toggle
+				.setValue(settings.pur_persist_viewport)
+				.onChange(async value => {
+					settings.pur_persist_viewport = value;
+					if (!value) this.plugin.clearPurViewportStates();
 					await this.plugin.saveSettings();
 				}));
-
+		new Setting(containerEl)
+			.setName(".pur item limit")
+			.setDesc("Maximum items per PureRef preview (default: 10000). Higher values use more memory and may slow rendering. Reload Obsidian after changing this.")
+			.addText(text => {
+				text.setValue(String(settings.pur_item_limit));
+				text.inputEl.type = 'number';
+				text.inputEl.min = '1';
+				text.inputEl.step = '1';
+				text.onChange(async value => {
+					const limit = Number(value);
+					const valid = value.trim() !== '' && Number.isSafeInteger(limit) && limit > 0;
+					text.inputEl.setCustomValidity(valid ? '' : 'Enter a positive whole number.');
+					text.inputEl.setAttribute('aria-invalid', String(!valid));
+					if (!valid) { text.inputEl.reportValidity(); return; }
+					settings.pur_item_limit = limit;
+					await this.plugin.saveSettings();
+				});
+			});
+		new Setting(containerEl)
+			.setName(".pur fit button")
+			.setDesc("Show the Fit button over the board.")
+			.addToggle(toggle => toggle
+				.setValue(settings.pur_show_fit)
+				.onChange(async value => {
+					settings.pur_show_fit = value;
+					await this.plugin.saveSettings();
+				}));
 		if (Platform.isDesktopApp) {
-			new Setting(containerEl)
-				.setName(".pur open button")
-				.setDesc("Open the board in its default app. Uses the system file icon.")
-				.addDropdown(dropdown => dropdown
-					.addOptions({ hidden: "Hidden", icon: "Icon", text: "Text", both: "Icon and text" })
-					.setValue(settings.pur_show_open ? settings.pur_open_display : "hidden")
-					.onChange(async (value) => {
-						settings.pur_show_open = value !== "hidden";
-						if (value !== "hidden") settings.pur_open_display = value as 'icon' | 'text' | 'both';
-						await this.plugin.saveSettings();
-					}));
 			new Setting(containerEl)
 				.setName(".pur executable")
 				.setDesc("Optional full path to PureRef, without quotes. Leave empty to use the default app.")

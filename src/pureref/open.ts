@@ -29,9 +29,42 @@ function iconDataURL(path: string): Promise<string | undefined> {
 	return readIcon(path);
 }
 
+const cleanAppName = (value: string | undefined): string | undefined => {
+	if (!value) return;
+	const path = require('path') as typeof import('path');
+	let name = path.win32.basename(value.trim().replace(/^['"]|['"]$/g, ''));
+	name = path.posix.basename(name).replace(/\.(?:exe|com|bat|cmd|app)$/i, '');
+	name = name.replace(/[_-]+/g, ' ').replace(/[\x00-\x1f\x7f]/g, '').replace(/\s+/g, ' ').trim();
+	if (!name || name === '.' || name === '..' || name.length > 48) return;
+	return name;
+};
+
+const registryValue = async (key: string, value?: string): Promise<string | undefined> => {
+	if (process.platform !== 'win32') return;
+	try {
+		const { execFile } = require('child_process') as typeof import('child_process');
+		const output = await new Promise<string>((resolve, reject) => execFile(
+			'reg.exe', ['query', key, ...(value ? ['/v', value] : ['/ve'])],
+			{ windowsHide: true, timeout: 1500, encoding: 'utf8' },
+			(error, stdout) => error ? reject(error) : resolve(stdout),
+		));
+		return output.match(/REG_(?:SZ|EXPAND_SZ)\s+(.+)$/m)?.[1]?.trim();
+	} catch { return; }
+};
+
+const windowsDefaultAppName = async (): Promise<string | undefined> => {
+	const userChoice = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FileExts\\.pur\\UserChoice';
+	const progId = await registryValue(userChoice, 'ProgId') ?? await registryValue('HKCR\\.pur');
+	if (!progId || /^(?:Applications\\)?ApplicationFrameHost/i.test(progId)) return;
+	const command = await registryValue(`HKCR\\${progId}\\shell\\open\\command`);
+	if (!command) return;
+	const executable = command.match(/^\s*"([^"]+)"/)?.[1] ?? command.match(/^\s*([^\s]+)/)?.[1];
+	return cleanAppName(executable);
+};
+
 /** Best effort: Electron's remote bridge is host-internal and may be unavailable. */
 export function externalAppInfo(app: App, file: TFile, executable: string): Promise<ExternalAppInfo> {
-	const fallback = { name: executable.trim() ? 'PureRef' : 'Default app' };
+	const fallback = { name: cleanAppName(executable) ?? 'Default app' };
 	if (!Platform.isDesktopApp || !(app.vault.adapter instanceof FileSystemAdapter)) return Promise.resolve(fallback);
 	const filePath = app.vault.adapter.getFullPath(file.path);
 	const key = executable.trim() || '.pur';
@@ -39,7 +72,11 @@ export function externalAppInfo(app: App, file: TFile, executable: string): Prom
 	const value = (async () => {
 		try {
 			const iconPath = executable.trim() || filePath;
-			return { ...fallback, icon: await iconDataURL(iconPath) };
+			const [icon, associatedName] = await Promise.all([
+				iconDataURL(iconPath),
+				executable.trim() ? Promise.resolve(fallback.name) : windowsDefaultAppName(),
+			]);
+			return { name: associatedName ?? fallback.name, icon };
 		} catch { return fallback; }
 	})();
 	cachedApp = { key, expires: Date.now() + 60_000, value };

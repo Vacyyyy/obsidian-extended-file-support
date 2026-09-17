@@ -18,7 +18,7 @@ try {
 	}
 	assert(page, `Open the generated vault first: ${vaultPath}`);
 	const errors = [];
-	page.on('pageerror', error => errors.push(error.message));
+	page.on('pageerror', error => errors.push(error.stack ?? error.message));
 	const probe = new URL('.test-vault/.obsidian/plugins/pureref-test-probe/', root);
 	await mkdir(probe, { recursive: true });
 	await writeFile(new URL('manifest.json', probe), JSON.stringify({
@@ -102,13 +102,14 @@ try {
 	assert.equal(await page.evaluate(() => app.workspace.activeLeaf.view.getMode()), 'source');
 	assert(await page.locator('.markdown-source-view .pureref-viewer').count() > 0);
 	console.log('PASS Live Preview: embedded boards render');
-	await open('demo.pur');
+	await open('automated-demo.pur');
 	assert.equal(await page.evaluate(() => app.workspace.activeLeaf.view.getViewType()), 'extended-file-support-pur');
 	const active = page.locator('.workspace-leaf.mod-active .pureref-viewer');
 	await active.locator('.pureref-viewport').click({ button: 'right' });
-	await page.getByRole('menuitemradio', { name: 'Dots', exact: true }).click();
+	await page.locator('.menu-item').filter({ hasText: /^Grid$/ }).click();
+	await page.locator('.menu-item').filter({ hasText: /^Dots$/ }).click();
 	await active.hover();
-	await active.getByRole('button', { name: 'Zoom in', exact: true }).click();
+	await page.evaluate(() => app.workspace.activeLeaf.view.component.viewer.zoomIn());
 	const before = await page.evaluate(() => app.workspace.activeLeaf.view.component.viewer.getState());
 	await page.evaluate(async () => { await app.workspace.activeLeaf.view.component.loadFile(); });
 	const after = await page.evaluate(() => app.workspace.activeLeaf.view.component.viewer.getState());
@@ -118,25 +119,24 @@ try {
 	try {
 		await active.hover();
 		await active.locator('.pureref-open-button').click();
-		assert.equal(await page.evaluate(() => window.purerefOpenedPath), resolve(vaultPath, 'demo.pur'));
+		assert.equal(await page.evaluate(() => window.purerefOpenedPath), resolve(vaultPath, 'automated-demo.pur'));
 	} finally {
 		await page.evaluate(() => { require('electron').shell.openPath = window.purerefOriginalOpen; delete window.purerefOriginalOpen; delete window.purerefOpenedPath; });
 	}
 	const settingsBefore = await page.evaluate(() => ({ ...app.plugins.plugins['extended-file-support'].settings }));
 	try {
-		for (const key of ['pur_show_zoom', 'pur_show_fit', 'pur_show_open']) {
+		for (const key of ['pur_show_fit']) {
 			await page.evaluate(async key => { const p = app.plugins.plugins['extended-file-support']; p.settings[key] = false; await p.saveSettings(); }, key);
 		}
-		assert.equal(await active.locator('.pureref-toolbar').isVisible(), false);
+		assert.equal(await active.getByRole('button', { name: /canvas movement/ }).isVisible(), true);
+		assert.equal(await active.getByRole('button', { name: 'Zoom in', exact: true }).count(), 0);
+		assert.equal(await active.getByRole('button', { name: 'Undo viewer change' }).count(), 0);
 		assert.equal(await active.locator('details').count(), 0);
-		await page.evaluate(async () => { const p = app.plugins.plugins['extended-file-support']; p.settings.pur_show_open = true; p.settings.pur_open_display = 'text'; await p.saveSettings(); });
-		assert.equal(await active.locator('.pureref-open-button img').count(), 0);
-		assert(await active.locator('.pureref-open-button').textContent());
+		assert.equal(await active.locator('.pureref-open-button').count(), 1);
 		assert.equal(await active.getByRole('button', { name: 'Fit board' }).count(), 0);
-		await page.evaluate(async () => { const p = app.plugins.plugins['extended-file-support']; p.settings.pur_open_display = 'both'; await p.saveSettings(); });
 		await active.locator('.pureref-open-button img').waitFor({ state: 'attached' });
 		assert.match(await active.locator('.pureref-open-button img').getAttribute('src'), /^data:image\/png;base64,/);
-		console.log('PASS toolbar settings: live visibility, icon/text modes, native OS icon; no limitations dropdown');
+		console.log('PASS toolbar settings: live visibility and native OS icon; no limitations dropdown');
 	} finally {
 		await page.evaluate(async settings => { const p = app.plugins.plugins['extended-file-support']; p.settings = settings; await p.saveSettings(); }, settingsBefore);
 	}
@@ -157,7 +157,7 @@ try {
 	// component reload. Save the open tab before changing its viewport so layout
 	// persistence cannot accidentally mask a missing viewport-session write.
 	for (const [file, mode, selector] of [
-		['demo.pur', undefined, '.workspace-leaf.mod-active .pureref-viewer'],
+		['automated-demo.pur', undefined, '.workspace-leaf.mod-active .pureref-viewer'],
 		['PureRef preview.md', 'preview', '.markdown-reading-view .pureref-viewer'],
 	]) {
 		await open(file, mode);
@@ -165,10 +165,11 @@ try {
 		const board = page.locator(selector).first();
 		await board.scrollIntoViewIfNeeded();
 		await board.hover();
-		await board.getByRole('button', { name: 'Zoom in', exact: true }).click();
+		await page.evaluate(() => app.workspace.activeLeaf.view.component.viewer.zoomIn());
 		await board.locator('.pureref-viewport').press('ArrowRight');
 		await board.locator('.pureref-viewport').click({ button: 'right' });
-		await page.getByRole('menuitemradio', { name: 'Dots', exact: true }).click();
+		await page.locator('.menu-item').filter({ hasText: /^Grid$/ }).click();
+		await page.locator('.menu-item').filter({ hasText: /^Dots$/ }).click();
 		await page.waitForFunction(selector => document.querySelector(selector)?.querySelector('.pureref-grid')?.dataset.grid === 'dots', selector);
 		const transform = await board.locator('.pureref-viewport > svg').evaluate(svg => svg.style.transform);
 		await Promise.all([
@@ -183,6 +184,22 @@ try {
 		assert.equal(await board.locator('.pureref-grid').getAttribute('data-grid'), 'dots');
 		console.log(`PASS Reload app without saving: pan, zoom, grid retained in ${mode ? 'note embed' : 'file tab'}`);
 	}
+	await open('demo.pur');
+	const commentBoard = page.locator('.workspace-leaf.mod-active .pureref-viewer');
+	assert.equal(await commentBoard.locator('.pureref-item-tooltip-target').count(), 0);
+	const commentsVisible = () => page.evaluate(() =>
+		app.workspace.activeLeaf.view.component.viewer.getState().commentsVisible);
+	if (await commentsVisible()) await commentBoard.locator('.pureref-viewport').press('Alt+c');
+	await commentBoard.locator('.pureref-viewport').click({ button: 'right' });
+	await page.locator('.menu-item').filter({ hasText: /^Show comments$/ }).click();
+	assert.equal(await commentsVisible(), true);
+	assert.equal(await commentBoard.locator('.pureref-comment-callout').count(), 2);
+	await commentBoard.locator('.pureref-viewport').click({ button: 'right' });
+	assert.equal(await page.locator('.menu-item').filter({ hasText: /^Hide comments$/ }).count(), 1);
+	await page.keyboard.press('Escape');
+	await commentBoard.locator('.pureref-viewport').press('Alt+c');
+	assert.equal(await commentsVisible(), false);
+	console.log('PASS comments: global context-menu toggle and contextual Alt+C callouts');
 	assert.deepEqual(errors, []);
 } finally {
 	if (page) await page.evaluate(async () => { await app.plugins.unloadPlugin('pureref-test-probe'); }).catch(() => {});

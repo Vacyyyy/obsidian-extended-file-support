@@ -15,6 +15,23 @@ export class PURComponent extends ExtensionComponent {
 	private disposed = false;
 	private settingsRef?: EventRef;
 	private iconGeneration = 0;
+	private cancelAttachmentWait?: () => void;
+
+	private waitForAttachment(): Promise<void> {
+		if (this.contentEl.isConnected) return Promise.resolve();
+		return new Promise(resolve => {
+			const observer = new MutationObserver(() => {
+				if (this.contentEl.isConnected) finish();
+			});
+			const finish = () => {
+				observer.disconnect();
+				if (this.cancelAttachmentWait === finish) this.cancelAttachmentWait = undefined;
+				resolve();
+			};
+			this.cancelAttachmentWait = finish;
+			observer.observe(this.contentEl.ownerDocument, { childList: true, subtree: true });
+		});
+	}
 
 	constructor(...args: ConstructorParameters<typeof ExtensionComponent>) {
 		super(...args);
@@ -48,6 +65,7 @@ export class PURComponent extends ExtensionComponent {
 	async loadFile(): Promise<void> {
 		if (this.disposed) return;
 		const generation = ++this.generation;
+		this.cancelAttachmentWait?.();
 		this.contentEl.setAttribute('aria-busy', 'true');
 		let board: PurFile | undefined;
 		try {
@@ -60,6 +78,12 @@ export class PURComponent extends ExtensionComponent {
 			if (generation !== this.generation || this.disposed) return;
 			if (data.byteLength > 128 * 1024 * 1024)
 				throw new Error('This preview supports files up to 128 MiB.');
+			// Obsidian can prepare embeds before inserting them into the document.
+			// Defer layout and Panzoom, and cancel the wait if this render is replaced.
+			while (!this.contentEl.isConnected) {
+				await this.waitForAttachment();
+				if (generation !== this.generation || this.disposed) return;
+			}
 			board = new PurFile(data, SQL);
 			const session = viewportSession(this.contentEl.ownerDocument,
 				this.plugin.app.vault.getName?.() ?? '', this.file.path);
@@ -101,6 +125,7 @@ export class PURComponent extends ExtensionComponent {
 		this.settingsRef = undefined;
 		this.disposed = true;
 		this.generation++;
+		this.cancelAttachmentWait?.();
 		this.viewer?.destroy();
 		this.viewer = undefined;
 		this.contentEl.removeAttribute('aria-busy');

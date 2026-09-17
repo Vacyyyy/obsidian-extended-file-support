@@ -7,6 +7,16 @@ test.beforeEach(async ({ page }) => {
 
 test('mixed board renders original images, notes and drawings', async ({ page }) => {
 	await expect(page.locator('svg image')).toHaveCount(3);
+	expect(await page.locator('svg image').evaluateAll(images => images.map(image => ({
+		id: image.closest('g[data-item-id]')?.getAttribute('data-item-id'),
+		label: image.getAttribute('aria-label'),
+	})))).toEqual([
+		{ id: '3', label: 'Gradient' },
+		{ id: '4', label: 'Checks' },
+		{ id: '5', label: 'Cropped duplicate' },
+	]);
+	await expect(page.locator('.pureref-item-tooltip-target')).toHaveCount(0);
+	await expect(page.locator('.pureref-viewport')).not.toHaveAttribute('aria-label', /.+/);
 	await expect(page.locator('svg foreignObject')).toHaveCount(2);
 	expect(
 		await page
@@ -70,11 +80,43 @@ test('hover wheel zoom, middle-mouse pan, outside scrolling and keyboard', async
 		y: 0,
 		scale: 1,
 		grid: 'none',
+		locked: false,
+		canvasGrayscale: false,
+		grayscaleItems: [],
+		commentsVisible: false,
 	});
 	await viewport.press('+');
 	expect(await page.evaluate(() => window.pureref.state().scale)).toBeGreaterThan(1);
 	await viewport.press('Escape');
 	await expect(viewport).not.toBeFocused();
+});
+
+test('arrows fit cropped images and wrap in both directions', async ({ page }) => {
+	const viewport = page.locator('.pureref-viewport');
+	const fitted = async index => {
+		await expect.poll(() => page.evaluate(index => {
+			const viewport = document.querySelector('.pureref-viewport').getBoundingClientRect();
+			const group = document.querySelectorAll('.pureref-viewport image')[index].closest('g[data-bounds]');
+			const b = JSON.parse(group.dataset.bounds), m = group.getScreenCTM();
+			const points = [[b.x,b.y],[b.x+b.width,b.y],[b.x,b.y+b.height],[b.x+b.width,b.y+b.height]]
+				.map(([x,y]) => new DOMPoint(x,y).matrixTransform(m));
+			const xs = points.map(p=>p.x), ys = points.map(p=>p.y);
+			const l=Math.min(...xs),r=Math.max(...xs),t=Math.min(...ys),d=Math.max(...ys);
+			return Math.abs((l+r)/2-(viewport.x+viewport.width/2)) < 1 &&
+				Math.abs((t+d)/2-(viewport.y+viewport.height/2)) < 1 &&
+				Math.abs(Math.max((r-l)/viewport.width,(d-t)/viewport.height)-1) < .01;
+		}, index)).toBe(true);
+	};
+	await viewport.press('ArrowRight');
+	await expect(viewport).toBeFocused();
+	await fitted(0);
+	await viewport.press('ArrowRight'); await fitted(1);
+	await viewport.press('ArrowRight'); await fitted(2);
+	await viewport.press('ArrowRight'); await fitted(0);
+	await viewport.press('ArrowLeft'); await fitted(2);
+	await viewport.press('f');
+	expect((await page.evaluate(() => window.pureref.state())).scale).toBe(1);
+	await viewport.press('ArrowLeft'); await fitted(2);
 });
 
 test('embed has no frame or permanent header', async ({ page }) => {
@@ -154,9 +196,10 @@ test('component sizing, stale loads, reload viewport and cleanup', async ({ page
 	await expect(page.locator('.pureref-viewer')).toHaveCSS('width', '600px');
 	await expect(page.locator('.pureref-viewport')).toHaveCSS('height', '400px');
 	await page.locator('.pureref-viewport').click({ button: 'right' });
-	await page.getByRole('menuitemradio', { name: 'Dots', exact: true }).click();
+	await page.locator('.menu-item').filter({ hasText: /^Grid$/ }).hover();
+	await page.locator('.menu-item').filter({ hasText: /^Dots$/ }).click();
 	await page.locator('.pureref-viewport').hover();
-	await page.getByRole('button', { name: 'Zoom in', exact: true }).click();
+	await page.evaluate(() => window.componentTest.zoomIn());
 	const before = await page.evaluate(() => window.componentTest.state());
 	await page.evaluate(async () => window.componentTest.resolve(0, new ArrayBuffer(0)));
 	await expect(page.locator('.pureref-viewer')).toHaveCount(1);
@@ -175,6 +218,104 @@ test('component sizing, stale loads, reload viewport and cleanup', async ({ page
 	await expect(page.locator('.pureref-viewer')).toHaveCount(0);
 	expect(await page.evaluate(() => window.componentTest.activeListeners())).toBe(0);
 	expect(await page.evaluate(() => window.pureref.urls())).toBe(0);
+});
+
+test('detached embeds wait for attachment and cancel on unload', async ({ page }) => {
+	await page.evaluate(() => window.pureref.mountComponent());
+	await page.evaluate(() => {
+		window.detachedBoard = document.querySelector('#board');
+		window.detachedBoard.remove();
+		window.componentTest.start();
+		window.componentTest.resolve(0);
+	});
+	await expect.poll(() => page.evaluate(() => window.componentTest.waitingForAttachment())).toBe(true);
+	expect(await page.evaluate(() => window.detachedBoard.querySelector('.pureref-error, .pureref-viewer'))).toBeNull();
+	await page.evaluate(() => document.body.append(window.detachedBoard));
+	await expect(page.locator('.pureref-viewer')).toHaveAttribute('data-ready', 'true');
+	await page.evaluate(() => {
+		window.detachedBoard.remove();
+		window.componentTest.start();
+		window.componentTest.resolve(1);
+	});
+	await expect.poll(() => page.evaluate(() => window.componentTest.waitingForAttachment())).toBe(true);
+	await page.evaluate(() => window.componentTest.close());
+	expect(await page.evaluate(() => window.componentTest.waitingForAttachment())).toBe(false);
+	await page.evaluate(() => document.body.append(window.detachedBoard));
+	await expect(page.locator('.pureref-viewer, .pureref-error')).toHaveCount(0);
+	expect(await page.evaluate(() => window.pureref.urls())).toBe(0);
+});
+
+test('movement lock, grids, grayscale and theme-aware canvas controls', async ({ page }) => {
+	const viewport = page.locator('.pureref-viewport');
+	await viewport.press('ArrowRight');
+	await page.evaluate(() => window.pureref.action('toggleImageGrayscale'));
+	await expect(page.locator('g[data-item-id="3"]')).toHaveClass(/is-grayscale/);
+	await expect(page.locator('g[data-item-id="4"]')).not.toHaveClass(/is-grayscale/);
+	await page.evaluate(() => window.pureref.action('toggleCanvasGrayscale'));
+	await expect(page.locator('.pureref-viewport > svg > g')).toHaveClass(/is-grayscale/);
+
+	await viewport.press('g');
+	await expect(page.locator('.pureref-grid')).toHaveAttribute('data-grid', 'lines');
+	await viewport.press('g');
+	await expect(page.locator('.pureref-grid')).toHaveAttribute('data-grid', 'none');
+	await page.evaluate(() => window.pureref.action('cycleGrid'));
+	await expect(page.locator('.pureref-grid')).toHaveAttribute('data-grid', 'lines');
+	await page.evaluate(() => window.pureref.action('cycleGrid'));
+	await expect(page.locator('.pureref-grid')).toHaveAttribute('data-grid', 'dots');
+	await page.evaluate(() => window.pureref.action('cycleGrid'));
+	await expect(page.locator('.pureref-grid')).toHaveAttribute('data-grid', 'none');
+
+	const lock = page.getByRole('button', { name: 'Lock canvas movement' });
+	await lock.click();
+	await expect(lock).toHaveAttribute('aria-pressed', 'true');
+	const before = await page.evaluate(() => window.pureref.state());
+	await viewport.hover();
+	await page.mouse.wheel(0, -300);
+	await page.evaluate(() => window.pureref.action('zoomIn'));
+	expect(await page.evaluate(() => window.pureref.state())).toEqual(before);
+
+	await page.evaluate(() => document.documentElement.style.setProperty('--background-primary', '#ffffff'));
+	await expect(viewport).toHaveCSS('background-color', 'rgb(255, 255, 255)');
+});
+
+test('viewer history undoes and redoes atomic changes and wheel bursts', async ({ page }) => {
+	const viewport = page.locator('.pureref-viewport');
+	await expect(page.getByRole('button', { name: /(?:Undo|Redo) viewer change/ })).toHaveCount(0);
+
+	await page.evaluate(() => window.pureref.action('zoomIn'));
+	const zoomed = await page.evaluate(() => window.pureref.state().scale);
+	expect(zoomed).toBeGreaterThan(1);
+	await page.evaluate(() => window.pureref.action('undo'));
+	expect(await page.evaluate(() => window.pureref.state().scale)).toBe(1);
+	await page.evaluate(() => window.pureref.action('redo'));
+	expect(await page.evaluate(() => window.pureref.state().scale)).toBe(zoomed);
+
+	await viewport.hover();
+	const beforeWheel = await page.evaluate(() => window.pureref.state().scale);
+	await page.mouse.wheel(0, -100);
+	await page.mouse.wheel(0, -100);
+	await page.waitForTimeout(300);
+	await page.evaluate(() => window.pureref.action('undo'));
+	expect(await page.evaluate(() => window.pureref.state().scale)).toBe(beforeWheel);
+
+	await page.evaluate(() => window.pureref.action('toggleLock'));
+	expect(await page.evaluate(() => window.pureref.state().locked)).toBe(true);
+	await page.evaluate(() => window.pureref.action('undo'));
+	expect(await page.evaluate(() => window.pureref.state().locked)).toBe(false);
+});
+
+test('comments use Alt-C callouts and the global context menu', async ({ page }) => {
+	await page.evaluate(() => window.pureref.load('comments-demo.pur'));
+	await expect(page.locator('.pureref-comment-callout:visible')).toHaveCount(0);
+	await page.evaluate(() => window.pureref.action('toggleComments'));
+	expect(await page.evaluate(() => window.pureref.state().commentsVisible)).toBe(true);
+	await expect(page.locator('.pureref-comment-callout')).toHaveCount(2);
+	await expect(page.locator('.pureref-comment-callout')).toContainText([
+		'Generated entirely by pureref2.py.',
+		'234 independently transformed items',
+	]);
+	await page.locator('.pureref-viewport').click({ button: 'right' });
+	await expect(page.locator('.menu-item').filter({ hasText: /^Hide comments$/ })).toHaveCount(1);
 });
 
 test('file switches release the previous component', async ({ page }) => {
@@ -306,12 +447,14 @@ test('touch pinch zooms without activation', async ({ browser }) => {
 test('grid menu supports keyboard, stays anchored during zoom, and cleans up', async ({ page }) => {
 	const viewport = page.locator('.pureref-viewport');
 	await viewport.click({ button: 'right' });
-	await expect(page.getByRole('menu', { name: 'Board grid' })).toBeVisible();
-	await expect(page.getByRole('menuitemradio', { name: 'None', exact: true })).toHaveAttribute(
+	await expect(page.getByRole('menu')).toBeVisible();
+	await page.locator('.menu-item').filter({ hasText: /^Grid$/ }).hover();
+	await expect(page.getByRole('menuitem', { name: 'None', exact: true })).toHaveAttribute(
 		'aria-checked',
 		'true',
 	);
-	await page.getByRole('menuitemradio', { name: 'Dots', exact: true }).click();
+	await page.locator('.menu-item').filter({ hasText: /^Grid$/ }).hover();
+	await page.locator('.menu-item').filter({ hasText: /^Dots$/ }).click();
 	await expect(page.locator('.pureref-grid')).toHaveAttribute('data-grid', 'dots');
 	const spacing = await page
 		.locator('.pureref-grid')
@@ -338,8 +481,9 @@ test('grid menu supports keyboard, stays anchored during zoom, and cleans up', a
 	});
 	expect(Math.max(...alignment)).toBeLessThan(0.01);
 	await viewport.press('Shift+F10');
-	await page.getByRole('menuitemradio', { name: 'Dots', exact: true }).press('ArrowUp');
-	await expect(page.getByRole('menuitemradio', { name: 'Lines', exact: true })).toBeFocused();
+	await page.getByRole('menuitem', { name: 'Grid', exact: true }).press('ArrowRight');
+	await page.getByRole('menuitem', { name: 'Dots', exact: true }).press('ArrowUp');
+	await expect(page.getByRole('menuitem', { name: 'Lines', exact: true })).toBeFocused();
 	await page.keyboard.press('Enter');
 	await expect(page.locator('.pureref-grid')).toHaveAttribute('data-grid', 'lines');
 	await viewport.click({ button: 'right' });
@@ -350,7 +494,8 @@ test('grid menu supports keyboard, stays anchored during zoom, and cleans up', a
 	await page.locator('h1').click();
 	await expect(page.getByRole('menu')).toHaveCount(0);
 	await viewport.click({ button: 'right' });
-	await page.getByRole('menuitemradio', { name: 'None', exact: true }).click();
+	await page.locator('.menu-item').filter({ hasText: /^Grid$/ }).hover();
+	await page.locator('.menu-item').filter({ hasText: /^None$/ }).click();
 	await expect(page.locator('.pureref-grid')).toBeHidden();
 	await viewport.click({ button: 'right' });
 	await page.evaluate(() => window.pureref.destroy());
