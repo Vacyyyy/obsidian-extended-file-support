@@ -2,6 +2,7 @@ import { DecodedRow, PainterPath, PurFile, Variant } from 'pur-2-file-format';
 import { noteContent } from './notes';
 import { loadNoteFonts } from './fonts';
 import { strokeOptions, withArrow } from './strokes';
+import { DEFAULT_SETTINGS } from '../settings';
 
 const NS = 'http://www.w3.org/2000/svg';
 let nextSceneId = 0;
@@ -58,6 +59,16 @@ function color(value: string | null, fallback: string): string {
 	if (/^#[\da-f]{8}$/i.test(value)) return `#${value.slice(3)}${value.slice(1, 3)}`; // Qt ARGB -> CSS RGBA
 	if (/^#[\da-f]{6}$/i.test(value)) return value;
 	return fallback;
+}
+
+function imageFileName(source: string | null, origin: string | null, itemName: string | null): string | undefined {
+	for (const value of [source, origin, itemName]) {
+		const normalized = value?.trim().replace(/\\/g, '/').replace(/\/+$/, '');
+		if (!normalized) continue;
+		const name = normalized.slice(normalized.lastIndexOf('/') + 1);
+		if (name) return name;
+	}
+	return undefined;
 }
 
 type Bounds = { x: number; y: number; width: number; height: number };
@@ -176,7 +187,7 @@ export interface RenderedScene {
 }
 
 /** Build a read-only scene. All URLs are owned by this instance and revoked on dispose. */
-export function renderScene(board: PurFile, doc: Document): RenderedScene {
+export function renderScene(board: PurFile, doc: Document, itemLimit?: number): RenderedScene {
 	const svg = svgElement(doc, 'svg', {
 		width: '100%',
 		height: '100%',
@@ -204,7 +215,10 @@ export function renderScene(board: PurFile, doc: Document): RenderedScene {
 		if (board.header.application_version !== '2.1.3')
 			warnings.add('This PureRef application version has not been verified.');
 		const items = board.decodedRows('items');
-		if (items.length > 10000) throw new Error('This preview supports up to 10,000 items.');
+		const limit = Number.isSafeInteger(itemLimit) && itemLimit! > 0
+			? itemLimit! : DEFAULT_SETTINGS.pur_item_limit;
+		if (items.length > limit)
+			throw new Error(`This preview supports up to ${limit.toLocaleString('en-US')} items. Change the .pur item limit in Extended File Support settings.`);
 		const images = new Map(board.decodedRows('items_images').map((row) => [row.id, row]));
 		const notes = new Map(board.decodedRows('items_notes').map((row) => [row.id, row]));
 		if (notes.size)
@@ -215,7 +229,13 @@ export function renderScene(board: PurFile, doc: Document): RenderedScene {
 			);
 		const groups = new Map(board.rows('items_groups').map((row) => [row.id, row]));
 		const drawings = new Map(board.decodedRows('items_drawings').map((row) => [row.id, row]));
-		const resources = new Map<number, { url: string; width: number; height: number }>();
+		const resources = new Map<number, {
+			url: string;
+			width: number;
+			height: number;
+			source: string | null;
+			origin: string | null;
+		}>();
 		let pixels = 0;
 		for (const resource of board.rows('images')) {
 			const { data, width, height } = resource;
@@ -245,7 +265,9 @@ export function renderScene(board: PurFile, doc: Document): RenderedScene {
 				new Blob([new Uint8Array(data)], { type: png ? 'image/png' : 'image/jpeg' }),
 			);
 			urls.push(url);
-			resources.set(resource.id, { url, width, height });
+			resources.set(resource.id, {
+				url, width, height, source: resource.source, origin: resource.origin,
+			});
 		}
 		const children = new Map<number, DecodedRow<'items'>[]>();
 		for (const item of items) {
@@ -285,6 +307,8 @@ export function renderScene(board: PurFile, doc: Document): RenderedScene {
 			try {
 				group.setAttribute('transform', affine(item.transform));
 				group.setAttribute('opacity', String(Math.max(0, Math.min(1, item.opacity ?? 1))));
+				if (typeof item.comment === 'string' && item.comment.trim())
+					group.dataset.comment = item.comment;
 				const description = svgElement(doc, 'desc');
 				description.textContent = item.name ?? `Item ${item.id}`;
 				group.append(description);
@@ -293,6 +317,8 @@ export function renderScene(board: PurFile, doc: Document): RenderedScene {
 					note = notes.get(item.id),
 					drawing = drawings.get(item.id),
 					folder = groups.get(item.id);
+				const fallbackLabel = instance ? 'Image' : note ? 'Note' : drawing ? 'Drawing' : folder ? 'Group' : '';
+				group.dataset.tooltipTitle = item.name?.trim() || fallbackLabel;
 				group.dataset.groupEligible = String(Boolean(instance || note || folder));
 				if (instance) {
 					const resource =
@@ -323,6 +349,12 @@ export function renderScene(board: PurFile, doc: Document): RenderedScene {
 						transform: affine(instance.image_transform),
 						preserveAspectRatio: 'none',
 					});
+					const tooltip = imageFileName(resource.source, resource.origin, item.name);
+					if (tooltip) {
+						image.setAttribute('aria-label', tooltip);
+						group.dataset.tooltipTitle = tooltip;
+						group.dataset.imageTooltip = 'true';
+					}
 					loads.push(
 						new Promise<void>((resolve) => {
 							const finish = () => {
@@ -509,6 +541,12 @@ export function finishScene(scene: RenderedScene): void {
 	).reverse();
 	for (const group of groups) {
 		group.querySelector(':scope > .pureref-group-background')?.remove();
+		delete group.dataset.bounds;
+		// Empty groups have no geometry to pad. In particular, truncating a
+		// deep hierarchy must not seed a 20x20 rectangle that grows by another
+		// 20 units at every ancestor and paints over unrelated siblings.
+		if (!group.querySelector(':scope > g[data-bounds][data-group-eligible="true"]'))
+			continue;
 		const box = visibleBounds(group, true);
 		group.prepend(
 			svgElement(group.ownerDocument, 'rect', {
@@ -540,13 +578,18 @@ export function finishScene(scene: RenderedScene): void {
 }
 
 /** Qt caps corner radii in screen space while retaining smaller radii when zoomed out. */
-export function updateCorners(scene: RenderedScene): void {
+export function updateCorners(scene: RenderedScene, viewportScale = 1): void {
 	for (const element of Array.from(
 		scene.content.querySelectorAll<SVGGraphicsElement>('[data-radius]'),
 	)) {
-		const matrix = element.getScreenCTM();
-		if (!matrix) continue;
-		const scale = Math.hypot(matrix.a, matrix.b),
+		let localScale = Number(element.dataset.cornerScale);
+		if (!Number.isFinite(localScale)) {
+			const matrix = element.getCTM();
+			if (!matrix) continue;
+			localScale = Math.hypot(matrix.a, matrix.b);
+			element.dataset.cornerScale = String(localScale);
+		}
+		const scale = localScale * viewportScale,
 			nominal = Number(element.dataset.radius);
 		const radius = Math.min(nominal, nominal / scale);
 		if (element.tagName === 'rect') element.setAttribute('rx', String(radius));
@@ -555,8 +598,13 @@ export function updateCorners(scene: RenderedScene): void {
 	for (const outline of Array.from(
 		scene.content.querySelectorAll<SVGPathElement>('.pureref-image-outline'),
 	)) {
-		const matrix = outline.getScreenCTM();
-		if (matrix)
-			outline.setAttribute('stroke-width', String(1 / Math.hypot(matrix.a, matrix.b)));
+		let localScale = Number(outline.dataset.cornerScale);
+		if (!Number.isFinite(localScale)) {
+			const matrix = outline.getCTM();
+			if (!matrix) continue;
+			localScale = Math.hypot(matrix.a, matrix.b);
+			outline.dataset.cornerScale = String(localScale);
+		}
+		outline.setAttribute('stroke-width', String(1 / (localScale * viewportScale)));
 	}
 }

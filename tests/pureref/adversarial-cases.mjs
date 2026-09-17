@@ -1,0 +1,21 @@
+// Shared by browser assertions and the generated Obsidian inspection guide.
+export const cases = [
+  { name: 'geometry', title: 'Mirrored crops inside rotated parents', images: 3, notes: 1,
+    check: 'Three cropped red/green images and a looping curve. Fit must include the curve; group backgrounds must not expand to its control points. Cycle images with Left/Right; each visible crop should fill the viewport. Zoom far in and back out.' },
+  { name: 'typography', title: 'Unicode, unbroken text, and absurdly short fixed heights', images: 0, notes: 4,
+    check: 'Four notes: mixed scripts/emoji, combining marks, a long unbroken token, and 35 lines. Height must grow beyond the stored 12 units. Check clipping and wrapping at narrow pane widths. Installed fallback fonts can differ; no Qt pixel-parity requirement.' },
+  { name: 'hostile-note', title: 'Hostile rich text', images: 0, notes: 2,
+    check: 'SAFE SENTINEL and VISIBLE SAFE TEXT remain readable. No images, frames, form controls, clickable links, navigation, or page-covering CSS from the note. Browser tests additionally trap attempted network requests and script execution. Do not open this intentionally hostile file in an external editor.' },
+  { name: 'graph', title: 'Cycles, orphan, excessive nesting, broken Qt transform', images: 0, notes: 1,
+    check: 'SURVIVOR remains visible, with no empty group rectangle covering it. ORPHAN and TOO DEEP text are omitted. Pan/zoom and switching away must remain responsive. Omission is expected; this does not promise support for malformed graph data.' },
+  { name: 'resources', title: 'Linked, oversized, unknown, and missing image resources', images: 1, notes: 1,
+    check: 'Only one red/green square and the SURVIVOR note render. Linked, oversized, unknown-format and missing resources are omitted. No external resource request. Declared dimensions exercise admission limits without allocating a giant bitmap.' },
+  { name: 'shared-400', title: '400 instances of one image resource', images: 400, notes: 0,
+    check: 'A 25 × 16 grid of squares. Repeatedly zoom, pan, resize, close, and reopen. Multiple embeds should behave independently; closing one must not blank the other. Browser tests require exactly one owned image URL per viewer.' },
+  { name: 'item-limit', title: '10,001 items', error: '10,000 items',
+    check: 'With the default .pur item limit of 10000, expect a visible item-limit error, then successfully open a good board. Set the limit to 10001 and reopen: this synthetic board of empty groups should load as an empty canvas without an error. Restore 10000 afterward.' },
+  { name: 'schema', title: 'Unsupported database schema', error: 'schema',
+    check: 'A visible unsupported-schema error, then successfully open a good board. No support for future upstream schemas is implied.' },
+  { name: 'truncated', title: 'Truncated envelope', error: true,
+    check: 'A visible file error, then successfully open a good board. Exact parser wording is intentionally not pinned.' },
+];

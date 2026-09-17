@@ -48,12 +48,10 @@ export class PURComponent extends ExtensionComponent {
 		const label = executable.trim() ? 'PureRef' : 'Default app';
 		viewer.setControls(settings);
 		viewer.setOpenAppearance(label);
-		if (settings.pur_show_open) {
-			void externalAppInfo(this.plugin.app, this.file, executable).then(info => {
-				if (!this.disposed && this.viewer === viewer && this.iconGeneration === generation)
-					viewer.setOpenAppearance(info.name, info.icon);
-			});
-		}
+		void externalAppInfo(this.plugin.app, this.file, executable).then(info => {
+			if (!this.disposed && this.viewer === viewer && this.iconGeneration === generation)
+				viewer.setOpenAppearance(info.name, info.icon);
+		});
 	}
 
 	parseLinkText(_: AltTextParsed): void {}
@@ -87,14 +85,20 @@ export class PURComponent extends ExtensionComponent {
 			board = new PurFile(data, SQL);
 			const session = viewportSession(this.contentEl.ownerDocument,
 				this.plugin.app.vault.getName?.() ?? '', this.file.path);
-			const state = this.viewer?.getState() ?? session.read();
+			const state = this.viewer?.getState() ?? this.plugin.getPurViewportState(this.file.path) ?? session.read();
 			this.viewer?.destroy();
 			this.viewer = undefined;
 			this.contentEl.empty();
 			this.contentEl.removeClass('extended-file-loading');
 			this.viewer = new PureRefViewer(this.contentEl, board, state, {
 				...this.plugin.settings,
-				onStateChange: session.write,
+				keymap: this.plugin.app.keymap,
+				parentScope: this.plugin.app.scope,
+				onOpenSettings: () => this.plugin.openSettings(),
+				onStateChange: state => {
+					session.write(state);
+					this.plugin.setPurViewportState(this.file.path, state);
+				},
 				onOpenEditor: Platform.isDesktopApp
 					? () => { void openPureRef(this.plugin.app, this.file, this.plugin.settings.pur_executable_path); }
 					: undefined,
