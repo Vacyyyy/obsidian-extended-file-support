@@ -22,6 +22,7 @@ The file types that are currently supported are:
 - `.psd` (Photoshop, other visual programs)
 - `.ai` (Adobe Illustrator)
 - `.clip` (Clip Studio Paint)
+- `.pur` (Experimental read-only PureRef 2.1.3 boards with pan and zoom)
 - `.gltf`, `.glb` (3D scene format)
 - `.obj` (3D object format)
 - `.stl` (3D format, often used for 3d printing)
@@ -47,7 +48,28 @@ Additionally, 3d objects that are loaded in are placed on `(0, 0, 0)` and scaled
 
 - `scale=number`, will override the default setting for `.ai` file scaling. High values might cause high loading time.
 
+**PureRef previews** (`.pur`):
+
+Scroll over a board to zoom, middle-drag to pan, and right-click to choose a grid.
+The toolbar can lock movement, the canvas follows Obsidian's theme, and grayscale can
+be toggled for the selected image or the whole board. Viewer-local undo and redo cover
+gestures and display controls through commands and keybindings.
+Alt+C shows or hides persistent Obsidian-styled comment callouts for the board.
+The board context menu provides the same Show Comments / Hide Comments action.
+Right-clicking the board opens grid and plugin settings. Toolbar buttons do not have
+context menus. Viewer actions are rebindable in Obsidian's Hotkeys settings.
+There are no zoom buttons; use the mouse, touchpad, keyboard, or commands instead.
+Plugin settings can hide the Fit button. The external-app button uses
+the system application icon, or a short application name when the icon is unavailable, unless a PureRef
+executable path is configured. External launching is desktop-only.
+View state always survives an Obsidian reload through window session storage. An optional
+setting also stores the 250 most recently used `.pur` view states in the plugin's standard
+`data.json`, allowing zoom, position, and display state to survive full app restarts.
+
 ## Contributing
+
+See the [PureRef proof of concept](docs/pureref-poc.md) for supported features,
+limitations, dependency packaging, a standalone preview, and browser tests.
 
 If you wish to contribute to the plugin, feel free to open a pull-request or an issue.
 If you're thinking about implementing a large feature, please open an issue first or contact me on discord at `n_1ck` 

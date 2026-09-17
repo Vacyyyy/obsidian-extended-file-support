@@ -12,6 +12,8 @@ node_modules
 # They should be uploaded to GitHub releases instead.
 main.js
 styles.css
+.test-vault/
+.test-obsidian/
 
 # Exclude sourcemaps
 *.map
@@ -21,3 +23,5 @@ data.json
 
 # Exclude macOS Finder (System Explorer) View States
 .DS_Store
+test-results/
+playwright-report/
