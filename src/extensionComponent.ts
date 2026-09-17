@@ -49,13 +49,16 @@ export abstract class ExtensionComponent extends Component {
 
 		this.fileModify = this.plugin.app.vault.on("modify", (f) => {
 			if (f === this.file) {
-				this.contentEl.addClass("extended-file-loading");
-                this.contentEl.empty();
-                this.contentEl.createEl("i", { text: `Reloading ${this.file?.name}...`});
-
-				this.loadFile();
+				this.onFileModified();
 			}
 		});
+	}
+
+	protected onFileModified(): void {
+		this.contentEl.addClass("extended-file-loading");
+		this.contentEl.empty();
+		this.contentEl.createEl("i", { text: `Reloading ${this.file?.name}...` });
+		this.loadFile();
 	}
 
 	abstract parseLinkText(settings: AltTextParsed): void;

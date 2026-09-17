@@ -8,6 +8,7 @@ import { CLIPComponent, CLIPView, VIEW_TYPE_CLIP } from "./extensions/clip"
 import { STLComponent, STLView, VIEW_TYPE_STL } from "./extensions/stl"
 import { AIComponent, AIView, VIEW_TYPE_AI } from "./extensions/ai"
 import { FBXComponent, FBXView, VIEW_TYPE_FBX } from "./extensions/fbx"
+import { PURComponent, PURView, VIEW_TYPE_PUR } from "./extensions/pur"
 
 export type Extension = {
 	types: string[],
@@ -18,6 +19,7 @@ export type Extension = {
 
 // Type should match settings field
 export const EXTENSION_REGISTRY: Extension[] = [
+	{ types: ["pur"], view_type: VIEW_TYPE_PUR, view: PURView, component: PURComponent },
 	{ types: ["kra"], view_type: VIEW_TYPE_KRA, view: KRAView, component: KRAComponent },
 	{ types: ["clip"], view_type: VIEW_TYPE_CLIP, view: CLIPView, component: CLIPComponent },
 	{ types: ["obj"], view_type: VIEW_TYPE_OBJ, view: OBJView, component: OBJComponent },

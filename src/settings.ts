@@ -1,4 +1,5 @@
 export interface ExtendedFileSupportSettings {
+	pur: boolean;
 	kra: boolean;
 	clip: boolean;
 	psd: boolean;
@@ -15,6 +16,7 @@ export interface ExtendedFileSupportSettings {
 }
 
 export const DEFAULT_SETTINGS: ExtendedFileSupportSettings = {
+	pur: true,
 	kra: true,
 	clip: true,
 	psd: true,
