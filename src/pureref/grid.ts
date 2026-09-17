@@ -14,6 +14,7 @@ export class BoardGrid {
 		private viewport: HTMLElement,
 		private svg: SVGSVGElement,
 		mode: GridMode = 'none',
+		private onChange?: () => void,
 	) {
 		this.mode = mode;
 		this.doc = viewport.ownerDocument;
@@ -101,6 +102,7 @@ export class BoardGrid {
 			button.textContent = title;
 			button.addEventListener('click', () => {
 				this.mode = value;
+				this.onChange?.();
 				this.refresh();
 				this.dismiss();
 				this.viewport.focus({ preventScroll: true });

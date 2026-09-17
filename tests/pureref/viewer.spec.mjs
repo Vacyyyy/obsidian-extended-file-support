@@ -30,7 +30,7 @@ test('mixed board renders original images, notes and drawings', async ({ page })
 	await expect(page.locator('svg > g path:not(.pureref-image-outline)')).toHaveCount(1);
 	await expect(page.locator('.pureref-image-outline')).toHaveCount(3);
 	expect(await page.evaluate(() => window.pureref.urls())).toBe(2); // shared resources
-	await expect(page.locator('.pureref-notices')).toContainText('typography');
+	await expect(page.locator('.pureref-notices, .pureref-viewer details')).toHaveCount(0);
 	await page.locator('.pureref-viewer').screenshot({ path: 'test-results/pureref-demo.png' });
 });
 
@@ -100,7 +100,7 @@ test('real fixture transforms, empty boards and multiple viewers clean up', asyn
 	await expect(page.locator('svg image')).toHaveCount(2);
 	await page.evaluate(() => window.pureref.load('empty.pur'));
 	expect(await page.evaluate(() => window.pureref.urls())).toBe(0);
-	await expect(page.locator('.pureref-notices')).toContainText('empty');
+	await expect(page.locator('.pureref-viewer')).toHaveAttribute('data-ready', 'true');
 	await page.evaluate(() => window.pureref.load('compact-note.pur'));
 	await expect(page.locator('.pureref-note')).toHaveCSS('padding', '4px');
 	await page.evaluate(() => window.pureref.destroy());

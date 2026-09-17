@@ -4,6 +4,8 @@
 	"description": "Extended file support for Obsidian",
 	"main": "main.js",
 	"scripts": {
+		"dev:pureref-vault": "npm run build && node scripts/pureref-vault.mjs",
+		"test:pureref:obsidian": "node scripts/test-pureref-obsidian.mjs",
 		"test:pureref": "playwright test --config tests/pureref/playwright.config.mjs",
 		"preview:pureref": "node scripts/pureref-preview.mjs",
 		"dev": "node esbuild.config.mjs",
@@ -30,7 +32,6 @@
 		"typescript": "5.9.3"
 	},
 	"dependencies": {
-		"@fontsource-variable/open-sans": "5.3.0",
 		"@panzoom/panzoom": "4.6.2",
 		"@webtoon/psd": "^0.4.0",
 		"@zip.js/zip.js": "^2.6.40",

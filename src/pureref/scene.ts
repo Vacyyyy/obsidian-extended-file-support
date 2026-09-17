@@ -353,6 +353,8 @@ export function renderScene(board: PurFile, doc: Document): RenderedScene {
 							d: pathData(bounds),
 							fill: 'none',
 							stroke: '#15191d',
+							'stroke-opacity': 0.4,
+							'clip-path': `url(#${clipId})`,
 							'stroke-width': 1,
 							'pointer-events': 'none',
 						}),

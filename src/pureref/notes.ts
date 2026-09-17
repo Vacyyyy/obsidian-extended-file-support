@@ -1,4 +1,9 @@
-import createDOMPurify from 'dompurify';
+import { sanitizeHTMLToDom } from 'obsidian';
+
+const textTags = new Set([
+	'P', 'BR', 'B', 'STRONG', 'I', 'EM', 'U', 'S', 'SPAN', 'DIV',
+	'UL', 'OL', 'LI', 'BLOCKQUOTE', 'PRE',
+]);
 
 const textStyles: Record<string, RegExp> = {
 	'font-family': /^[\w\s,'"-]{1,100}$/,
@@ -18,33 +23,28 @@ const textStyles: Record<string, RegExp> = {
 
 /** Preserve basic Qt rich text without links, resources, arbitrary CSS or executable markup. */
 export function noteContent(doc: Document, html: string): HTMLElement {
-	const purifier = createDOMPurify(doc.defaultView!);
-	const clean = purifier.sanitize(html, {
-		RETURN_DOM: true,
-		WHOLE_DOCUMENT: true,
-		ALLOWED_TAGS: [
-			'html',
-			'head',
-			'body',
-			'p',
-			'br',
-			'b',
-			'strong',
-			'i',
-			'em',
-			'u',
-			's',
-			'span',
-			'div',
-			'ul',
-			'ol',
-			'li',
-			'blockquote',
-			'pre',
-		],
-		ALLOWED_ATTR: ['style', 'start', 'value', 'dir'],
-	}) as HTMLElement; // WHOLE_DOCUMENT + RETURN_DOM returns the sanitized <html> element.
-	for (const node of Array.from(clean.querySelectorAll<HTMLElement>('[style]'))) {
+	// Template contents stay inert: even resource URLs must not be fetched while
+	// processing a note. Fragment parsing drops <body> attributes, so preserve Qt's
+	// body typography on an ordinary wrapper; discard the document head entirely.
+	const template = doc.createElement('template');
+	template.innerHTML = html
+		.replace(/<body(?=[\s>])/gi, '<div data-pureref-body=""')
+		.replace(/<\/body\s*>/gi, '</div>')
+		.replace(/<head(?=[\s>])/gi, '<template')
+		.replace(/<\/head\s*>/gi, '</template>');
+	for (const node of Array.from(template.content.querySelectorAll<HTMLElement>('*'))) {
+		if (node.namespaceURI === 'http://www.w3.org/1999/xhtml' && node.tagName === 'A') {
+			node.replaceWith(...Array.from(node.childNodes));
+			continue;
+		}
+		if (node.namespaceURI !== 'http://www.w3.org/1999/xhtml' || !textTags.has(node.tagName)) {
+			node.remove();
+			continue;
+		}
+		for (const attribute of Array.from(node.attributes)) {
+			if (!['style', 'start', 'value', 'dir', 'data-pureref-body'].includes(attribute.name))
+				node.removeAttribute(attribute.name);
+		}
 		// Qt rejects decimal pixel font sizes (even 24.0px), while the browser
 		// normalizes them to integers. Check the original declaration before normalization.
 		const rawSize = (node.getAttribute('style') ?? '')
@@ -76,10 +76,13 @@ export function noteContent(doc: Document, html: string): HTMLElement {
 			node.style.setProperty(key, key === 'font-family' ? `${family}, sans-serif` : value);
 		}
 	}
-	const body = clean.querySelector('body') ?? clean;
+	// Use the host's security boundary, after applying our stricter no-resources
+	// rich-text policy. No independent sanitizer is shipped with the plugin.
+	const clean = sanitizeHTMLToDom(template.innerHTML);
+	const body = clean.querySelector<HTMLElement>('[data-pureref-body]');
 	const content = doc.createElement('div');
 	content.className = 'pureref-note-content';
-	content.style.cssText = body.getAttribute('style') ?? '';
-	for (const node of Array.from(body.childNodes)) content.append(doc.importNode(node, true));
+	content.style.cssText = body?.getAttribute('style') ?? '';
+	for (const node of Array.from((body ?? clean).childNodes)) content.append(doc.importNode(node, true));
 	return content;
 }

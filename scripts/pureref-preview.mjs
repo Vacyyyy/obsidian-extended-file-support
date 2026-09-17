@@ -2,6 +2,7 @@ import { context } from 'esbuild';
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
+import { buildStyles } from './styles.mjs';
 
 const root = new URL('../', import.meta.url);
 const buildContext = await context({
@@ -11,8 +12,8 @@ const buildContext = await context({
 	format: 'iife',
 	platform: 'browser',
 	target: 'es2020',
-	external: ['fs', 'path', 'crypto'],
-	loader: { '.wasm': 'binary', '.woff2': 'dataurl' },
+	external: ['fs', 'path', 'crypto', 'child_process', 'electron'],
+	loader: { '.wasm': 'binary' },
 	alias: { obsidian: fileURLToPath(new URL('tests/pureref/obsidian-stub.mjs', root)) },
 });
 await buildContext.rebuild();
@@ -33,6 +34,7 @@ const mime = { css: 'text/css', pur: 'application/octet-stream' };
 const server = createServer(async (req, res) => {
 	try {
 		const path = new URL(req.url, 'http://localhost').pathname;
+		if (path === '/styles.css') await buildStyles();
 		if (path === '/') {
 			res.setHeader('Content-Type', 'text/html');
 			res.end(html);

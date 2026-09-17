@@ -1,5 +1,15 @@
 // Only the lifecycle/DOM surfaces needed by PURComponent/PURView in browser tests.
 // This harness does not claim to be a full Obsidian integration test.
+// noteContent applies its restrictive policy before this host boundary. This
+// inert fragment stub is not a sanitizer; native-host tests cover Obsidian's API.
+export function sanitizeHTMLToDom(html) {
+	const template = document.createElement('template');
+	template.innerHTML = html;
+	return template.content;
+}
+export const Platform = { isDesktopApp: false };
+export class FileSystemAdapter {}
+export class Notice {}
 export class Component {
 	load() {
 		this.onload?.();

@@ -10,6 +10,13 @@ export interface ViewportState {
 	grid?: GridMode;
 }
 
+export interface PureRefControls {
+	pur_show_zoom?: boolean;
+	pur_show_fit?: boolean;
+	pur_show_open?: boolean;
+	pur_open_display?: 'icon' | 'text' | 'both';
+}
+
 /** Host-independent viewer shared by file tabs, embeds and the browser tests. */
 export class PureRefViewer {
 	readonly element: HTMLDivElement;
@@ -20,17 +27,27 @@ export class PureRefViewer {
 	private listeners: (() => void)[] = [];
 	private disposed = false;
 	private grid: BoardGrid;
+	private toolbar: HTMLDivElement;
+	private controls: { key: keyof PureRefControls; button: HTMLButtonElement }[] = [];
+	private openButton?: HTMLButtonElement;
+	private openDisplay: 'icon' | 'text' | 'both' = 'icon';
+	private openLabel = 'PureRef';
+	private openIcon?: string;
+	private interacted = false;
 
 	constructor(
 		container: HTMLElement,
 		board: PurFile,
 		state?: ViewportState,
-		options: { onOpenEditor?: () => void } = {},
+		options: PureRefControls & {
+			onOpenEditor?: () => void;
+			onStateChange?: (state: ViewportState) => void;
+		} = {},
 	) {
 		const doc = container.ownerDocument;
 		this.element = doc.createElement('div');
 		this.element.className = 'pureref-viewer';
-		const toolbar = doc.createElement('div');
+		const toolbar = this.toolbar = doc.createElement('div');
 		toolbar.className = 'pureref-toolbar';
 		toolbar.setAttribute('role', 'group');
 		toolbar.setAttribute('aria-label', 'PureRef preview controls');
@@ -42,16 +59,23 @@ export class PureRefViewer {
 			el.setAttribute('aria-label', title);
 			this.listen(el, 'click', (event) => {
 				event.stopPropagation();
+				this.interacted = true;
 				action();
 			});
 			toolbar.append(el);
 			return el;
 		};
-		button('−', 'Zoom out', () => this.panzoom.zoomOut({ animate: false }));
-		button('+', 'Zoom in', () => this.panzoom.zoomIn({ animate: false }));
-		button('Fit', 'Fit board', () => this.fit());
-		if (options.onOpenEditor)
-			button('Open in PureRef', 'Open in PureRef', options.onOpenEditor);
+		this.controls.push(
+			{ key: 'pur_show_zoom', button: button('−', 'Zoom out', () => this.panzoom.zoomOut({ animate: false })) },
+			{ key: 'pur_show_zoom', button: button('+', 'Zoom in', () => this.panzoom.zoomIn({ animate: false })) },
+			{ key: 'pur_show_fit', button: button('Fit', 'Fit board', () => this.fit()) },
+		);
+		if (options.onOpenEditor) {
+			this.openButton = button('', 'Open in PureRef', options.onOpenEditor);
+			this.openButton.className = 'pureref-open-button';
+			this.controls.push({ key: 'pur_show_open', button: this.openButton });
+		}
+		this.setControls(options);
 		this.viewport = doc.createElement('div');
 		this.viewport.className = 'pureref-viewport';
 		this.viewport.tabIndex = 0;
@@ -77,7 +101,14 @@ export class PureRefViewer {
 				startY: state?.y ?? 0,
 				startScale: state?.scale ?? 1,
 			});
-			this.grid = new BoardGrid(this.viewport, this.scene.svg, state?.grid);
+			const saveState = () => {
+				if (this.interacted && !this.disposed) options.onStateChange?.(this.getState());
+			};
+			this.grid = new BoardGrid(this.viewport, this.scene.svg, state?.grid, () => {
+				this.interacted = true;
+				saveState();
+			});
+			this.listen(this.scene.svg, 'panzoomchange', saveState);
 			const corners = () => updateCorners(this.scene);
 			this.listen(this.scene.svg, 'panzoomchange', corners);
 			const resize = new ResizeObserver(corners);
@@ -87,6 +118,7 @@ export class PureRefViewer {
 			this.listen(this.viewport, 'pointerdown', (event) => {
 				const pointer = event as PointerEvent;
 				if (pointer.pointerType === 'mouse' && pointer.button !== 1) return;
+				this.interacted = true;
 				pointers.set(pointer.pointerId, pointer);
 				this.viewport.setPointerCapture(pointer.pointerId);
 				this.viewport.focus({ preventScroll: true });
@@ -127,6 +159,8 @@ export class PureRefViewer {
 				(event) => {
 					event.stopPropagation();
 					this.panzoom.zoomWithWheel(event as WheelEvent);
+					this.interacted = true;
+					saveState();
 				},
 				{ passive: false },
 			);
@@ -145,6 +179,8 @@ export class PureRefViewer {
 				else if (key === 'ArrowUp') this.panzoom.pan(pan.x, pan.y + step);
 				else if (key === 'ArrowDown') this.panzoom.pan(pan.x, pan.y - step);
 				else return;
+				this.interacted = true;
+				saveState();
 				event.preventDefault();
 				event.stopPropagation();
 			});
@@ -153,21 +189,6 @@ export class PureRefViewer {
 				finishScene(this.scene);
 				updateCorners(this.scene);
 				this.grid.refresh();
-				if (this.scene.warnings.size) {
-					const details = doc.createElement('details');
-					details.className = 'pureref-notices';
-					const summary = doc.createElement('summary');
-					summary.textContent = 'Preview limitations';
-					details.append(summary);
-					const list = doc.createElement('ul');
-					for (const warning of this.scene.warnings) {
-						const li = doc.createElement('li');
-						li.textContent = warning;
-						list.append(li);
-					}
-					details.append(list);
-					this.element.append(details);
-				}
 				this.element.dataset.ready = 'true';
 			});
 		} catch (error) {
@@ -192,6 +213,38 @@ export class PureRefViewer {
 
 	getState(): ViewportState {
 		return { ...this.panzoom.getPan(), scale: this.panzoom.getScale(), grid: this.grid.mode };
+	}
+
+	setControls(settings: PureRefControls): void {
+		for (const control of this.controls) control.button.hidden = settings[control.key] === false;
+		this.toolbar.hidden = this.controls.every(control => control.button.hidden);
+		this.openDisplay = settings.pur_open_display ?? 'icon';
+		this.setOpenAppearance(this.openLabel, this.openIcon);
+	}
+
+	setOpenAppearance(label: string, icon?: string): void {
+		this.openLabel = label;
+		this.openIcon = icon;
+		if (!this.openButton || this.disposed) return;
+		const button = this.openButton, doc = button.ownerDocument;
+		button.replaceChildren();
+		button.title = label === 'Default app' ? 'Open in default app' : `Open in ${label}`;
+		button.setAttribute('aria-label', button.title);
+		if (this.openDisplay !== 'text') {
+			if (icon) {
+				const image = doc.createElement('img');
+				image.src = icon;
+				image.alt = '';
+				image.width = image.height = 16;
+				button.append(image);
+			} else {
+				const fallback = doc.createElement('span');
+				fallback.textContent = '↗';
+				fallback.setAttribute('aria-hidden', 'true');
+				button.append(fallback);
+			}
+		}
+		if (this.openDisplay !== 'icon') button.append(doc.createTextNode(label));
 	}
 
 	private fit(): void {

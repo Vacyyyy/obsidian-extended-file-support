@@ -1,8 +1,11 @@
 import { PurFile } from 'pur-2-file-format';
+import { EventRef, Platform } from 'obsidian';
 import { AltTextParsed, ExtensionComponent } from '../extensionComponent';
 import { ExtensionView } from '../extensionView';
 import { getSQLite } from '../pureref/sqlite';
 import { PureRefViewer } from '../pureref/viewer';
+import { externalAppInfo, openPureRef } from '../pureref/open';
+import { viewportSession } from '../pureref/viewport-state';
 
 export const VIEW_TYPE_PUR = 'extended-file-support-pur';
 
@@ -10,6 +13,31 @@ export class PURComponent extends ExtensionComponent {
 	private viewer?: PureRefViewer;
 	private generation = 0;
 	private disposed = false;
+	private settingsRef?: EventRef;
+	private iconGeneration = 0;
+
+	constructor(...args: ConstructorParameters<typeof ExtensionComponent>) {
+		super(...args);
+		this.settingsRef = this.plugin.purerefSettingsEvents?.on('change', () => {
+			this.updateSettings();
+		});
+	}
+
+	private updateSettings(): void {
+		const viewer = this.viewer, settings = this.plugin.settings;
+		if (!viewer || !settings) return;
+		const generation = ++this.iconGeneration;
+		const executable = settings.pur_executable_path;
+		const label = executable.trim() ? 'PureRef' : 'Default app';
+		viewer.setControls(settings);
+		viewer.setOpenAppearance(label);
+		if (settings.pur_show_open) {
+			void externalAppInfo(this.plugin.app, this.file, executable).then(info => {
+				if (!this.disposed && this.viewer === viewer && this.iconGeneration === generation)
+					viewer.setOpenAppearance(info.name, info.icon);
+			});
+		}
+	}
 
 	parseLinkText(_: AltTextParsed): void {}
 
@@ -33,12 +61,21 @@ export class PURComponent extends ExtensionComponent {
 			if (data.byteLength > 128 * 1024 * 1024)
 				throw new Error('This preview supports files up to 128 MiB.');
 			board = new PurFile(data, SQL);
-			const state = this.viewer?.getState();
+			const session = viewportSession(this.contentEl.ownerDocument,
+				this.plugin.app.vault.getName?.() ?? '', this.file.path);
+			const state = this.viewer?.getState() ?? session.read();
 			this.viewer?.destroy();
 			this.viewer = undefined;
 			this.contentEl.empty();
 			this.contentEl.removeClass('extended-file-loading');
-			this.viewer = new PureRefViewer(this.contentEl, board, state);
+			this.viewer = new PureRefViewer(this.contentEl, board, state, {
+				...this.plugin.settings,
+				onStateChange: session.write,
+				onOpenEditor: Platform.isDesktopApp
+					? () => { void openPureRef(this.plugin.app, this.file, this.plugin.settings.pur_executable_path); }
+					: undefined,
+			});
+			this.updateSettings();
 			if (this.width && this.width > 0) this.viewer.element.style.width = `${this.width}px`;
 			if (this.height && this.height > 0)
 				this.viewer.element.style.setProperty('--pureref-height', `${this.height}px`);
@@ -60,6 +97,8 @@ export class PURComponent extends ExtensionComponent {
 	}
 
 	cleanup(): void {
+		if (this.settingsRef) this.plugin.purerefSettingsEvents.offref(this.settingsRef);
+		this.settingsRef = undefined;
 		this.disposed = true;
 		this.generation++;
 		this.viewer?.destroy();

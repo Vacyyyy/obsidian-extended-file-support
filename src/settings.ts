@@ -1,5 +1,10 @@
 export interface ExtendedFileSupportSettings {
 	pur: boolean;
+	pur_show_zoom: boolean;
+	pur_show_fit: boolean;
+	pur_show_open: boolean;
+	pur_open_display: 'icon' | 'text' | 'both';
+	pur_executable_path: string;
 	kra: boolean;
 	clip: boolean;
 	psd: boolean;
@@ -17,6 +22,11 @@ export interface ExtendedFileSupportSettings {
 
 export const DEFAULT_SETTINGS: ExtendedFileSupportSettings = {
 	pur: true,
+	pur_show_zoom: true,
+	pur_show_fit: true,
+	pur_show_open: true,
+	pur_open_display: 'icon',
+	pur_executable_path: '',
 	kra: true,
 	clip: true,
 	psd: true,

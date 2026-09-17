@@ -1,10 +1,11 @@
-import { App, Plugin, PluginSettingTab, Setting } from 'obsidian';
+import { App, Events, Platform, Plugin, PluginSettingTab, Setting } from 'obsidian';
 import { EXTENSION_REGISTRY } from 'src/extensionsRegistry';
 import { DEFAULT_SETTINGS, ExtendedFileSupportSettings } from 'src/settings';
 import { EmbedRegistry } from 'obsidian-typings';
 
 export default class ExtendedFileSupport extends Plugin {
 	settings: ExtendedFileSupportSettings;
+	readonly purerefSettingsEvents = new Events();
 
 	async onload() {
 		await this.loadSettings();
@@ -48,6 +49,7 @@ export default class ExtendedFileSupport extends Plugin {
 
 	async saveSettings() {
 		await this.saveData(this.settings);
+		this.purerefSettingsEvents.trigger('change');
 	}
 
 	public toggleExtension(extension: string, enable: boolean): void {
@@ -85,17 +87,6 @@ class ExtendedFileSupportSettingTab extends PluginSettingTab {
 		new Setting(containerEl)
 			.setName("Image formats")
 			.setHeading();
-
-		new Setting(containerEl)
-			.setName(".pur")
-			.setDesc("Read-only PureRef 2.1 boards. Experimental; verified with 2.1.3.")
-			.addToggle(toggle => toggle
-				.setValue(this.plugin.settings.pur)
-				.onChange(async (value) => {
-					this.plugin.settings.pur = value;
-					await this.plugin.saveSettings();
-					this.plugin.toggleExtension("pur", value);
-				}));
 
 		new Setting(containerEl)
 			.setName(".psd")
@@ -151,6 +142,57 @@ class ExtendedFileSupportSettingTab extends PluginSettingTab {
 						this.plugin.settings.ai_render_scale = Number(value);
 						await this.plugin.saveSettings();
 					}));
+
+		new Setting(containerEl)
+			.setName(".pur")
+			.setDesc("PureRef boards. Read-only previews; verified with PureRef 2.1.3.")
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.pur)
+				.onChange(async (value) => {
+					this.plugin.settings.pur = value;
+					await this.plugin.saveSettings();
+					this.plugin.toggleExtension("pur", value);
+				}));
+
+		const settings = this.plugin.settings;
+		const controls = settings.pur_show_zoom
+			? (settings.pur_show_fit ? "both" : "zoom")
+			: (settings.pur_show_fit ? "fit" : "none");
+		new Setting(containerEl)
+			.setName(".pur controls")
+			.setDesc("Buttons shown over the board. Mouse and keyboard controls always work.")
+			.addDropdown(dropdown => dropdown
+				.addOptions({ both: "Zoom and Fit", zoom: "Zoom only", fit: "Fit only", none: "None" })
+				.setValue(controls)
+				.onChange(async (value) => {
+					settings.pur_show_zoom = value === "both" || value === "zoom";
+					settings.pur_show_fit = value === "both" || value === "fit";
+					await this.plugin.saveSettings();
+				}));
+
+		if (Platform.isDesktopApp) {
+			new Setting(containerEl)
+				.setName(".pur open button")
+				.setDesc("Open the board in its default app. Uses the system file icon.")
+				.addDropdown(dropdown => dropdown
+					.addOptions({ hidden: "Hidden", icon: "Icon", text: "Text", both: "Icon and text" })
+					.setValue(settings.pur_show_open ? settings.pur_open_display : "hidden")
+					.onChange(async (value) => {
+						settings.pur_show_open = value !== "hidden";
+						if (value !== "hidden") settings.pur_open_display = value as 'icon' | 'text' | 'both';
+						await this.plugin.saveSettings();
+					}));
+			new Setting(containerEl)
+				.setName(".pur executable")
+				.setDesc("Optional full path to PureRef, without quotes. Leave empty to use the default app.")
+				.addText(text => text
+					.setPlaceholder("Use default app")
+					.setValue(settings.pur_executable_path)
+					.onChange(async (value) => {
+						settings.pur_executable_path = value.trim();
+						await this.plugin.saveSettings();
+					}));
+		}
 
 		new Setting(containerEl)
 			.setName("3D formats")
