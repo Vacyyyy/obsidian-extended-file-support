@@ -44,7 +44,7 @@ export class CLIPComponent extends ExtensionComponent {
                 }
 
                 const imageBytes = result[0].values[0][0] as Uint8Array;
-                const image_file = new Blob([imageBytes]);
+                const image_file = new Blob([new Uint8Array(imageBytes)]);
                 this.objectURL = URL.createObjectURL(image_file);
             } catch (error) {
                 console.error('Error accessing imageData from sqlite database.', error);
